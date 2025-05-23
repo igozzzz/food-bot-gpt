@@ -34,10 +34,15 @@ app = FastAPI()
 @app.post("/", status_code=200)
 async def telegram_webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, bot)
-    # передаём всем хендлерам
-    await application.process_update(update)
-    return {}
+    try:
+        update = Update.de_json(data, bot)
+        await application.process_update(update)
+    except Exception as e:
+        # Печать ошибки и стека в логи Render
+        print("❌ Ошибка в обработчике webhook:", e)
+        import traceback; traceback.print_exc()
+    return {"ok": True}
+
 
 # При старте сервера устанавливаем webhook
 @app.on_event("startup")
