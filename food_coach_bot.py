@@ -5,7 +5,11 @@ import base64
 
 from PIL import Image
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -25,11 +29,11 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 GENDER, AGE, HEIGHT, WEIGHT, WAIST, HIPS, ACTIVITY, HABITS, GOAL, DIET = range(10)
 
 # --- Хранилища данных пользователей ---
-user_profiles = {}    # хранит профиль и нормы КБЖУ
-user_habits = {}      # временно хранит выбор вредных привычек
-last_meal = {}        # хранит данные последнего блюда
+user_profiles = {}
+user_habits    = {}
+last_meal      = {}
 
-# --- Вспомогательная функция пересчёта на порцию ---
+# --- Утилита пересчёта на порцию ---
 def scale(value: float, weight: int) -> float:
     return round(value * weight / 100, 1)
 
@@ -48,29 +52,29 @@ async def gender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return AGE
 
 async def age(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isdigit():
+    txt = update.message.text.strip()
+    if not txt.isdigit():
         await update.message.reply_text("Пожалуйста, введи возраст цифрами.")
         return AGE
-    context.user_data["age"] = int(text)
+    context.user_data["age"] = int(txt)
     await update.message.reply_text("Рост (см):")
     return HEIGHT
 
 async def height(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isdigit():
+    txt = update.message.text.strip()
+    if not txt.isdigit():
         await update.message.reply_text("Пожалуйста, введи рост цифрами (см).")
         return HEIGHT
-    context.user_data["height"] = int(text)
+    context.user_data["height"] = int(txt)
     await update.message.reply_text("Вес (кг):")
     return WEIGHT
 
 async def weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isdigit():
+    txt = update.message.text.strip()
+    if not txt.isdigit():
         await update.message.reply_text("Пожалуйста, введи вес цифрами (кг).")
         return WEIGHT
-    context.user_data["weight"] = int(text)
+    context.user_data["weight"] = int(txt)
     await update.message.reply_text("Обхват талии (см, можно пропустить):")
     return WAIST
 
@@ -100,8 +104,8 @@ async def activity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    text = update.message.text
-    if text == "Далее":
+    txt = update.message.text
+    if txt == "Далее":
         context.user_data["habits"] = ", ".join(user_habits[uid]) or "Нет"
         keyboard = [["Похудеть", "Поддерживать вес"], ["Набрать массу", "Улучшить здоровье"]]
         await update.message.reply_text(
@@ -110,10 +114,10 @@ async def habits(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return GOAL
 
-    if text == "Нет вредных привычек":
+    if txt == "Нет вредных привычек":
         user_habits[uid] = ["Нет"]
-    elif text not in user_habits[uid]:
-        user_habits[uid].append(text)
+    elif txt not in user_habits[uid]:
+        user_habits[uid].append(txt)
 
     await update.message.reply_text(
         f"✅ Отмечено: {', '.join(user_habits[uid])}\n"
@@ -133,19 +137,19 @@ async def goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def diet(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["diet"] = update.message.text
     uid = update.effective_user.id
-    d = context.user_data
+    d   = context.user_data
 
-    # Расчёт BMR (Mifflin–St Jeor), корректировка на активность и цель
-    bmr = 10 * d["weight"] + 6.25 * d["height"] - 5 * d["age"] + (5 if d["gender"].startswith("М") else -161)
-    factors = {"сидячий": 1.2, "легкая": 1.375, "средняя": 1.55, "высокая": 1.725}
+    # BMR + активность + цель
+    bmr = 10*d["weight"] + 6.25*d["height"] - 5*d["age"] + (5 if d["gender"].startswith("М") else -161)
+    factors = {"сидячий":1.2, "легкая":1.375, "средняя":1.55, "высокая":1.725}
     factor = factors.get(d["activity"].split()[0].lower(), 1.2)
-    tdee = round(bmr * factor)
+    tdee   = round(bmr * factor)
     if "похуд" in d["goal"].lower(): tdee -= 300
     elif "мас" in d["goal"].lower(): tdee += 300
 
     protein = round(d["weight"] * 1.6)
     fat     = round(d["weight"] * 0.9)
-    carb    = round((tdee - (protein * 4 + fat * 9)) / 4)
+    carb    = round((tdee - (protein*4 + fat*9)) / 4)
 
     user_profiles[uid] = {
         "profile": d,
@@ -164,29 +168,29 @@ async def diet(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Обработка фото и GPT-анализ ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
+    uid   = update.effective_user.id
     photo = update.message.photo[-1]
-    file = await photo.get_file()
-    bio = io.BytesIO()
+    file  = await photo.get_file()
+    bio   = io.BytesIO()
     await file.download_to_memory(out=bio)
     image = Image.open(bio).convert("RGB")
 
-    buffered = io.BytesIO()
-    image.save(buffered, format="JPEG")
-    img_b64 = base64.b64encode(buffered.getvalue()).decode()
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG")
+    img_b64 = base64.b64encode(buffer.getvalue()).decode()
 
     await update.message.reply_text("🤖 Анализирую фото...")
 
     resp = openai.ChatCompletion.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content":
-             "Ты — эксперт по питанию. Ответь по шаблону:\n"
+            {"role":"system","content":
+             "Ты — эксперт по питанию. Ответь строго по шаблону:\n"
              "1. Название блюда\n2. Калории на 100 г\n"
              "3. Белки, Жиры, Углеводы\nНа русском языке."},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": "Что на фото?"}
+            {"role":"user","content":[
+                {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{img_b64}"}},
+                {"type":"text","text":"Что на фото?"}
             ]}
         ],
         temperature=0.2,
@@ -218,59 +222,85 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Если знаешь вес порции, напиши его в граммах."
     )
 
-# --- Пересчёт и советы от диетолога ---
+# --- Пересчёт и советы с корректными % ---
 async def handle_weight(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    text = update.message.text.strip()
-    if uid not in last_meal or not text.isdigit():
+    uid  = update.effective_user.id
+    txt  = update.message.text.strip()
+    if uid not in last_meal or not txt.isdigit():
         return
-    weight = int(text)
+    weight = int(txt)
     meal   = last_meal[uid]
     norma  = user_profiles.get(uid, {}).get("norma", {})
 
+    # расчёт
     cal  = scale(meal["cal"],  weight)
     prot = scale(meal["prot"], weight)
     fat  = scale(meal["fat"],  weight)
     carb = scale(meal["carb"], weight)
 
-    pct = lambda v,n: round(v/n*100,1) if n else 0
+    pct = lambda v, n: round(v / n * 100, 1) if n else 0
+
+    lines = [f"🍽 {meal['dish']} — {weight} г"]
+
+    # калории
+    line = f"🔥 {cal} ккал"
+    if norma.get("cal"):
+        line += f" ({pct(cal, norma['cal'])}%)"
+    lines.append(line)
+
+    # белки
+    line = f"🥩 {prot} г"
+    if norma.get("protein"):
+        line += f" ({pct(prot, norma['protein'])}%)"
+    lines.append(line)
+
+    # жиры
+    line = f"� 🥑 {fat} г"
+    if norma.get("fat"):
+        line += f" ({pct(fat, norma['fat'])}%)"
+    lines.append(line)
+
+    # углеводы
+    line = f"🍞 {carb} г"
+    if norma.get("carb"):
+        line += f" ({pct(carb, norma['carb'])}%)"
+    lines.append(line)
+
+    # советы
     comments = []
     goal = user_profiles.get(uid, {}).get("profile", {}).get("goal","").lower()
-    if pct(fat, norma.get("fat",1)) > 40 and "похуд" in goal:
+    if norma.get("fat") and pct(fat, norma["fat"]) > 40 and "похуд" in goal:
         comments.append("Много жиров для похудения.")
-    if pct(prot, norma.get("protein",1)) < 15:
+    if norma.get("protein") and pct(prot, norma["protein"]) < 15:
         comments.append("Низкий белок — добавь яйца или бобовые.")
-    if pct(carb, norma.get("carb",1)) > 60:
+    if norma.get("carb") and pct(carb, norma["carb"]) > 60:
         comments.append("Много углеводов — подумай о клетчатке.")
 
-    await update.message.reply_text(
-        f"🍽 {meal['dish']} — {weight} г\n"
-        f"🔥 {cal} ккал ({pct(cal, norma.get('cal',1))}%)\n"
-        f"🥩 {prot} г ({pct(prot, norma.get('protein',1))}%)\n"
-        f"🥑 {fat} г ({pct(fat, norma.get('fat',1))}%)\n"
-        f"🍞 {carb} г ({pct(carb, norma.get('carb',1))}%)\n\n"
-        + ("\n".join(comments) if comments else "Нет рекомендаций.")
-    )
+    if comments:
+        lines.append("")  # пустая строка
+        lines.extend(comments)
 
-# --- Сборка ConversationHandler и запуск бота ---
+    await update.message.reply_text("\n".join(lines))
+
+# --- Сборка бота и запуск ---
 def main():
-    app = ApplicationBuilder()\
-        .token(TELEGRAM_TOKEN)\
+    app = ApplicationBuilder() \
+        .token(TELEGRAM_TOKEN) \
         .build()
 
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
-            GENDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, gender)],
-            AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, age)],
-            HEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, height)],
-            WEIGHT: [MessageHandler(filters.TEXT & ~filters.COMMAND, weight)],
-            WAIST: [MessageHandler(filters.TEXT & ~filters.COMMAND, waist)],
-            HIPS: [MessageHandler(filters.TEXT & ~filters.COMMAND, hips)],
+            GENDER:   [MessageHandler(filters.TEXT & ~filters.COMMAND, gender)],
+            AGE:      [MessageHandler(filters.TEXT & ~filters.COMMAND, age)],
+            HEIGHT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, height)],
+            WEIGHT:   [MessageHandler(filters.TEXT & ~filters.COMMAND, weight)],
+            WAIST:    [MessageHandler(filters.TEXT & ~filters.COMMAND, waist)],
+            HIPS:     [MessageHandler(filters.TEXT & ~filters.COMMAND, hips)],
             ACTIVITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, activity)],
-            HABITS: [MessageHandler(filters.TEXT & ~filters.COMMAND, habits)],
-            GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal)],
-            DIET: [MessageHandler(filters.TEXT & ~filters.COMMAND, diet)],
+            HABITS:   [MessageHandler(filters.TEXT & ~filters.COMMAND, habits)],
+            GOAL:     [MessageHandler(filters.TEXT & ~filters.COMMAND, goal)],
+            DIET:     [MessageHandler(filters.TEXT & ~filters.COMMAND, diet)],
         },
         fallbacks=[]
     )
@@ -283,4 +313,4 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()
+main()
