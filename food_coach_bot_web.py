@@ -4,7 +4,6 @@ import re
 import base64
 
 from fastapi import FastAPI, Request
-from pydantic import BaseModel
 from dotenv import load_dotenv
 from PIL import Image
 import openai
@@ -14,66 +13,64 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
-# --- Загрузка конфигурации ---
+# === Загрузка конфигов ===
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-WEBHOOK_URL    = os.getenv("WEBHOOK_URL")   # например: https://your-app.onrender.com/
-PORT           = int(os.getenv("PORT", "8000"))
+WEBHOOK_URL    = os.getenv("WEBHOOK_URL")    # https://<your-render-domain>.onrender.com/
+PORT           = int(os.getenv("PORT", 8000))
 
 openai.api_key = OPENAI_API_KEY
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# === FastAPI приложение ===
+# === FastAPI app ===
 app = FastAPI()
 
-# Перехват обновлений от Telegram
+# --- простой GET на / для здоровья ---
+@app.get("/")
+async def root():
+    return {"status": "Bot is running"}
+
+# --- Telegram Webhook endpoint ---
 @app.post("/", status_code=200)
 async def telegram_webhook(req: Request):
     data = await req.json()
     try:
-        update = Update.de_json(data, bot)
-        await application.process_update(update)
+        upd = Update.de_json(data, bot)
+        await application.process_update(upd)
     except Exception as e:
-        # Печать ошибки и стека в логи Render
-        print("❌ Ошибка в обработчике webhook:", e)
+        print("❌ Ошибка в webhook handler:", e)
         import traceback; traceback.print_exc()
     return {"ok": True}
 
-
-# При старте сервера устанавливаем webhook
+# --- Устанавливаем webhook при старте FastAPI ---
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(WEBHOOK_URL)
     print("✅ Webhook установлен:", WEBHOOK_URL)
 
-# === Ваши хендлеры ===
-
+# === Обработчики бота ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Пришли фото блюда — я определю, что это, "
-        "и выдам КБЖУ на 100 г."
+        "👋 Привет! Пришли фото блюда — я определю его и выдам КБЖУ на 100 г."
     )
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # скачиваем картинку
     photo = update.message.photo[-1]
     fobj  = await photo.get_file()
     bio   = io.BytesIO()
     await fobj.download_to_memory(out=bio)
 
-    # конвертим и кодируем в base64
-    image  = Image.open(bio).convert("RGB")
-    buff   = io.BytesIO()
-    image.save(buff, format="JPEG")
-    img_b64 = base64.b64encode(buff.getvalue()).decode()
+    img = Image.open(bio).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    img_b64 = base64.b64encode(buf.getvalue()).decode()
 
     await update.message.reply_text("🤖 Анализирую фото...")
 
-    # вызываем GPT Vision
     resp = openai.ChatCompletion.create(
         model="gpt-4o",
         messages=[
@@ -93,8 +90,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     text = resp.choices[0].message.content
-
-    # парсим регулярками
     name = re.search(r"1\.\s*(.+)", text)
     cal  = re.search(r"(\d+)[^\d]*ккал", text.lower())
     prot = re.search(r"белк.*?(\d+)", text.lower())
@@ -102,12 +97,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     carb = re.search(r"углевод.*?(\d+)", text.lower())
 
     dish = name.group(1).strip() if name else "Не распознано"
-    cal   = cal.group(1)  if cal  else "—"
+    cal   = cal.group(1) if cal else "—"
     prot  = prot.group(1) if prot else "—"
-    fat   = fat.group(1)  if fat  else "—"
+    fat   = fat.group(1) if fat else "—"
     carb  = carb.group(1) if carb else "—"
 
-    # отвечаем
     await update.message.reply_text(
         f"🍽 Блюдо: {dish}\n"
         f"🔥 Калории: {cal} ккал / 100 г\n"
@@ -116,7 +110,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🍞 Углеводы: {carb} г"
     )
 
-# === Сборка приложения Telegram ===
+# === Сборка ApplicationBuilder ===
 application = ApplicationBuilder()\
     .token(TELEGRAM_TOKEN)\
     .build()
@@ -124,7 +118,7 @@ application = ApplicationBuilder()\
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-# === Запуск Uvicorn, если стартуем локально ===
+# === Локальный запуск через Uvicorn ===
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
