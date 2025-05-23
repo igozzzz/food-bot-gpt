@@ -122,4 +122,4 @@ application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 # === Запуск Uvicorn, если стартуем локально ===
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("food_bot_webhook:app", host="0.0.0.0", port=PORT)
+    uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
