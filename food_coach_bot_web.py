@@ -40,6 +40,7 @@ async def telegram_webhook(req: Request):
         upd = Update.de_json(data, bot)
         await application.initialize()
         await application.process_update(upd)
+        await application.bot.initialize()
     except Exception as e:
         print("❌ Ошибка в webhook handler:", e)
         import traceback; traceback.print_exc()
@@ -71,26 +72,22 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🤖 Анализирую фото...")
 
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": (
-                "Ты — эксперт по питанию. Ответь строго по шаблону. На русском языке:\n"
-                "1. Название блюда (одно предложение)\n"
-                "2. Калории на 100 г: (число) ккал\n"
-                "3. Белки: (число) г\n"
-                "4. Жиры: (число) г\n"
-                "5. Углеводы: (число) г\n"
-                "⚠️ Не добавляй ничего лишнего!"
-            )},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": "Что на фото?"}
-            ]}
-        ],
-        temperature=0.2,
-        max_tokens=300
-    )
+from openai import OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "Ты — эксперт по питанию..."},
+        {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+            {"type": "text", "text": "Что на фото?"}
+        ]}
+    ],
+    temperature=0.2,
+    max_tokens=200
+)
+
 
     reply = response.choices[0].message.content
 
