@@ -184,9 +184,6 @@ application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 async def telegram_webhook(req: Request) -> dict:
     """Обработчик webhook-запросов от Telegram"""
     try:
-        # Убедимся, что Application инициализирована
-        if not application.bot.initialized:
-            await application.bot.initialize()
         data = await req.json()
         update = Update.de_json(data, application.bot)
         if update:
