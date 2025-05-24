@@ -44,10 +44,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет! Пришли фото блюда — я определю его и выдам КБЖУ на 100 г."
     )
 
+from openai import OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# updated photo handling
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]
-    fobj  = await photo.get_file()
-    bio   = io.BytesIO()
+    fobj = await photo.get_file()
+    bio = io.BytesIO()
     await fobj.download_to_memory(out=bio)
 
     img = Image.open(bio).convert("RGB")
@@ -57,44 +62,54 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🤖 Анализирую фото...")
 
-    resp = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role":"system","content":
-             "Ты — эксперт по питанию. Кратко по шаблону:\n"
-             "1. Название блюда\n"
-             "2. Калории на 100 г\n"
-             "3. Белки, Жиры, Углеводы на 100 г\n"
-             "На русском."},
-            {"role":"user","content":[
-                {"type":"image_url","image_url":{"url":f"data:image/jpeg;base64,{img_b64}"}},
-                {"type":"text","text":"Что на фото?"}
-            ]}
-        ],
-        temperature=0.2,
-        max_tokens=200
-    )
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — эксперт по питанию. Отвечай кратко по шаблону:\n"
+                               "1. Название блюда\n"
+                               "2. Калории на 100 г\n"
+                               "3. Белки, Жиры, Углеводы на 100 г\n"
+                               "Отвечай на русском языке."
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                        {"type": "text", "text": "Что на фото?"}
+                    ]
+                }
+            ],
+            max_tokens=400
+        )
 
-    text = resp.choices[0].message.content
-    name = re.search(r"1\.\s*(.+)", text)
-    cal  = re.search(r"(\d+)[^\d]*ккал", text.lower())
-    prot = re.search(r"белк.*?(\d+)", text.lower())
-    fat  = re.search(r"жир.*?(\d+)", text.lower())
-    carb = re.search(r"углевод.*?(\d+)", text.lower())
+        text = response.choices[0].message.content
 
-    dish = name.group(1).strip() if name else "Не распознано"
-    cal   = cal.group(1) if cal else "—"
-    prot  = prot.group(1) if prot else "—"
-    fat   = fat.group(1) if fat else "—"
-    carb  = carb.group(1) if carb else "—"
+        name = re.search(r"1\.\s*(.+)", text)
+        cal  = re.search(r"(\d+)[^\d]*ккал", text.lower())
+        prot = re.search(r"белк.*?(\d+)", text.lower())
+        fat  = re.search(r"жир.*?(\d+)", text.lower())
+        carb = re.search(r"углевод.*?(\d+)", text.lower())
 
-    await update.message.reply_text(
-        f"🍽 Блюдо: {dish}\n"
-        f"🔥 Калории: {cal} ккал / 100 г\n"
-        f"🥩 Белки: {prot} г\n"
-        f"🥑 Жиры: {fat} г\n"
-        f"🍞 Углеводы: {carb} г"
-    )
+        dish = name.group(1).strip() if name else "Не распознано"
+        cal  = cal.group(1) if cal else "—"
+        prot = prot.group(1) if prot else "—"
+        fat  = fat.group(1) if fat else "—"
+        carb = carb.group(1) if carb else "—"
+
+        await update.message.reply_text(
+            f"🍽 Блюдо: {dish}\n"
+            f"🔥 Калории: {cal} ккал / 100 г\n"
+            f"🥩 Белки: {prot} г\n"
+            f"🥑 Жиры: {fat} г\n"
+            f"🍞 Углеводы: {carb} г"
+        )
+
+    except Exception as e:
+        await update.message.reply_text("❌ Ошибка при анализе фото.")
+        print("Ошибка OpenAI:", e)
 
 # Регистрируем хендлеры
 application.add_handler(CommandHandler("start", start))
@@ -115,6 +130,7 @@ async def telegram_webhook(req: Request):
 # --- Инициализация и установка webhook при старте ---
 @app.on_event("startup")
 async def on_startup():
+    await application.initialize()
     await application.initialize()
     await bot.set_webhook(WEBHOOK_URL)
     print("✅ Webhook установлен:", WEBHOOK_URL)
