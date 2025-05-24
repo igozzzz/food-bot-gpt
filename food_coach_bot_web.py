@@ -16,6 +16,7 @@ from telegram.ext import (
     ContextTypes,
 )
 import uvicorn
+import httpx
 
 # === Настройка логирования ===
 logging.basicConfig(
@@ -47,13 +48,23 @@ bot = Bot(token=TELEGRAM_TOKEN)
 app = FastAPI()
 client = AsyncOpenAI(
     api_key=OPENAI_API_KEY,
-    http_client=None  # Явно отключаем кастомизацию http_client для избежания проблем
+    http_client=None  # Отключаем кастомизацию http_client
 )
 application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+# === Обработчик ошибок ===
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик ошибок для Telegram-бота"""
+    logger.error(f"Ошибка в обработке обновления: {context.error}")
+    if update and update.message:
+        await update.message.reply_text("⚠️ Произошла ошибка. Попробуй снова позже.")
 
 # === Обработчики Telegram ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик команды /start"""
+    if not update.message:
+        logger.warning(f"Обновление от {update.effective_user.id} не содержит сообщения")
+        return
     await update.message.reply_text(
         "👋 Привет! Я — бот-диетолог.\n\n"
         "📸 Пришли мне фото еды — и я подскажу:\n"
@@ -66,6 +77,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик загруженных фотографий"""
     try:
+        if not update.message or not update.message.photo:
+            logger.warning(f"Обновление от {update.effective_user.id} не содержит фото")
+            return
+
         photo = update.message.photo[-1]
         # Проверка размера файла
         if photo.file_size > MAX_FILE_SIZE:
@@ -74,8 +89,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         file = await photo.get_file()
-        bio = io.BytesIO()
-        await file.download(out=bio)
+        # Загрузка файла в память с использованием httpx
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(file.file_path)
+            response.raise_for_status()
+            bio = io.BytesIO(response.content)
         bio.seek(0)
 
         # Конвертация изображения
@@ -87,14 +105,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("🤖 Анализирую фото...")
         logger.info(f"Обработка фото от {update.effective_user.id}")
 
-        # Запрос к OpenAI с JSON-ответом
+        # Запрос к OpenAI
         response = await client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "Ты нутрициолог. Проанализируй фото еды и верни JSON-ответ со следующими полями:\n"
+                        "Ты нутрициолог. Проанализируй фото еды и верни ответ в формате JSON со следующими полями:\n"
                         "- dish: название блюда (строка)\n"
                         "- calories: калории на 100 г (число или строка '—' если неизвестно)\n"
                         "- protein: белки на 100 г (число или строка '—' если неизвестно)\n"
@@ -113,22 +131,32 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             ],
             temperature=0.3,
             max_tokens=300,
-            response_format={"type": "json_object"},
         )
 
-        # Парсинг JSON-ответа
+        # Парсинг ответа
         try:
-            data = json.loads(response.choices[0].message.content)
-            dish = data.get("dish", "Не распознано")
-            cal = data.get("calories", "—")
-            prot = data.get("protein", "—")
-            fat = data.get("fat", "—")
-            carb = data.get("carbs", "—")
+            response_text = response.choices[0].message.content
+            logger.debug(f"Ответ от OpenAI: {response_text}")
+            data = json.loads(response_text)
+            # Проверка наличия всех ключей
+            required_keys = ["dish", "calories", "protein", "fat", "carbs"]
+            if not all(key in data for key in required_keys):
+                raise ValueError("Некоторые данные отсутствуют в ответе OpenAI")
+            dish = data["dish"]
+            cal = str(data["calories"])
+            prot = str(data["protein"])
+            fat = str(data["fat"])
+            carb = str(data["carbs"])
         except json.JSONDecodeError as e:
             logger.error(f"Ошибка парсинга JSON от OpenAI: {e}")
-            await update.message.reply_text("⚠️ Ошибка обработки ответа. Попробуй другое фото.")
+            await update.message.reply_text("⚠️ Ошибка обработки ответа от OpenAI. Попробуй другое фото.")
+            return
+        except (KeyError, ValueError) as e:
+            logger.error(f"Ошибка в данных от OpenAI: {e}")
+            await update.message.reply_text("⚠️ Недостаточно данных от OpenAI. Попробуй другое фото.")
             return
 
+        # Отправка ответа
         await update.message.reply_text(
             f"🍽 Блюдо: {dish}\n"
             f"🔥 Калории: {cal} ккал / 100 г\n"
@@ -140,11 +168,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     except Exception as e:
         logger.error(f"Ошибка обработки фото для {update.effective_user.id}: {e}")
-        await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуй другое изображение.")
+        if update.message:
+            await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуй другое изображение.")
+        return
     finally:
         bio.close()
 
 # === Подключение обработчиков ===
+application.add_error_handler(error_handler)
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
@@ -153,8 +184,11 @@ application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 async def telegram_webhook(req: Request) -> dict:
     """Обработчик webhook-запросов от Telegram"""
     try:
+        # Убедимся, что Application инициализирована
+        if not application.bot.initialized:
+            await application.bot.initialize()
         data = await req.json()
-        update = Update.de_json(data, bot)
+        update = Update.de_json(data, application.bot)
         if update:
             await application.process_update(update)
             logger.info(f"Обработан webhook-запрос от {update.effective_user.id}")
