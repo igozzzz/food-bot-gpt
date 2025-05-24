@@ -77,35 +77,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик загруженных фотографий"""
     try:
+        # Проверка, что обновление содержит фото
         if not update.message or not update.message.photo:
             logger.warning(f"Обновление от {update.effective_user.id} не содержит фото")
             return
 
         photo = update.message.photo[-1]
+        logger.info(f"Получено фото от {update.effective_user.id}, размер: {photo.file_size} байт")
+        
         # Проверка размера файла
         if photo.file_size > MAX_FILE_SIZE:
             await update.message.reply_text("⚠️ Фото слишком большое! Максимум 10 МБ.")
             logger.warning(f"Слишком большой файл от {update.effective_user.id}: {photo.file_size} байт")
             return
 
+        # Получение файла
         file = await photo.get_file()
-        # Загрузка файла в память с использованием httpx
-        async with httpx.AsyncClient() as http_client:
+        logger.debug(f"Файл получен, file_path: {file.file_path}")
+        
+        # Загрузка файла через httpx с таймаутом
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
             response = await http_client.get(file.file_path)
             response.raise_for_status()
+            logger.debug(f"Загрузка файла: статус {response.status_code}")
             bio = io.BytesIO(response.content)
         bio.seek(0)
 
-        # Конвертация изображения
+        # Преобразование изображения в base64
         with Image.open(bio).convert("RGB") as image:
             buffer = io.BytesIO()
             image.save(buffer, format="JPEG", quality=85)
             img_b64 = base64.b64encode(buffer.getvalue()).decode()
+            logger.debug(f"Изображение преобразовано в base64, размер: {len(img_b64)} байт")
 
+        # Уведомление пользователя
         await update.message.reply_text("🤖 Анализирую фото...")
-        logger.info(f"Обработка фото от {update.effective_user.id}")
+        logger.info(f"Обработка фото от {update.effective_user.id} начата")
 
-        # Запрос к OpenAI
+        # Запрос к OpenAI для анализа изображения
         response = await client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -133,12 +142,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             max_tokens=300,
         )
 
-        # Парсинг ответа
+        # Парсинг ответа от OpenAI
+        response_text = response.choices[0].message.content.strip()
+        logger.debug(f"Полный ответ от OpenAI: {response_text}")
         try:
-            response_text = response.choices[0].message.content
-            logger.debug(f"Ответ от OpenAI: {response_text}")
             data = json.loads(response_text)
-            # Проверка наличия всех ключей
             required_keys = ["dish", "calories", "protein", "fat", "carbs"]
             if not all(key in data for key in required_keys):
                 raise ValueError("Некоторые данные отсутствуют в ответе OpenAI")
@@ -148,15 +156,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             fat = str(data["fat"])
             carb = str(data["carbs"])
         except json.JSONDecodeError as e:
-            logger.error(f"Ошибка парсинга JSON от OpenAI: {e}")
-            await update.message.reply_text("⚠️ Ошибка обработки ответа от OpenAI. Попробуй другое фото.")
+            logger.error(f"Ошибка парсинга JSON от OpenAI: {e}. Ответ: {response_text}")
+            await update.message.reply_text("⚠️ Ошибка обработки ответа от OpenAI. Проверь фото или попробуй позже.")
             return
         except (KeyError, ValueError) as e:
-            logger.error(f"Ошибка в данных от OpenAI: {e}")
-            await update.message.reply_text("⚠️ Недостаточно данных от OpenAI. Попробуй другое фото.")
+            logger.error(f"Ошибка в данных от OpenAI: {e}. Ответ: {response_text}")
+            await update.message.reply_text("⚠️ Недостаточно данных от OpenAI. Проверь фото или попробуй позже.")
             return
 
-        # Отправка ответа
+        # Отправка результата пользователю
         await update.message.reply_text(
             f"🍽 Блюдо: {dish}\n"
             f"🔥 Калории: {cal} ккал / 100 г\n"
@@ -166,11 +174,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         logger.info(f"Успешно обработано фото для {update.effective_user.id}: {dish}")
 
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Ошибка HTTP при загрузке файла: {e}")
+        await update.message.reply_text("⚠️ Ошибка загрузки фото. Попробуй снова.")
     except Exception as e:
         logger.error(f"Ошибка обработки фото для {update.effective_user.id}: {e}")
         if update.message:
             await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуй другое изображение.")
-        return
     finally:
         bio.close()
 
