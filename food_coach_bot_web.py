@@ -28,9 +28,17 @@ openai = OpenAI(api_key=OPENAI_API_KEY)
 # === FastAPI app ===
 app = FastAPI()
 
-# === Telegram bot setup ===
+# === Инициализация Telegram Application ===
 application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-application.initialize()
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+@app.on_event("startup")
+async def on_startup():
+    await application.initialize()
+    await bot.set_webhook(WEBHOOK_URL)
+    print(f"✅ Webhook установлен: {WEBHOOK_URL}")
 
 # === Обработчики ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
