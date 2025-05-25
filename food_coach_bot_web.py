@@ -30,65 +30,83 @@ openai_client = openai.AsyncOpenAI(
     http_client=httpx.AsyncClient(timeout=30.0),
 )
 
-# ─────── OpenAI Helper ───────
+# ─────── OpenAI helper ───────
 async def analyse_image(img_b64: str) -> dict:
-    try:
-        resp = await openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=200,
-            messages=[
-                {"role":"system","content":
-                 "Ты нутрициолог. Верни JSON-объект с ключами dish, calories, protein, fat, carbs. "
-                 "Значения — на 100 г. Если не уверен — оцени примерно."},
-                {"role":"user","content":[
-                    {"type":"image_url", "image_url":{"url":f"data:image/jpeg;base64,{img_b64}"}},
-                    {"type":"text","text":"Проанализируй фото блюда."}
-                ]}
-            ],
-        )
-        return resp.choices[0].message.content
-    except openai.error.RateLimitError:
-        raise RuntimeError("Слишком много запросов к OpenAI, попробуйте чуть позже")
-    except Exception as e:
-        raise RuntimeError(f"OpenAI error: {e}")
+    resp = await openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        response_format={"type": "json_object"},
+        temperature=0.2,
+        max_tokens=200,
+        messages=[
+            {"role": "system",
+             "content": (
+                 "Ты нутрициолог. Верни JSON-объект с ключами: "
+                 "dish, calories, protein, fat, carbs. "
+                 "Значения — на 100 г. Если не уверен — ставь \"—\"."
+             )},
+            {"role": "user",
+             "content": [
+                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                 {"type": "text", "text": "Проанализируй блюдо на фото."},
+             ]},
+        ],
+    )
+    content = resp.choices[0].message.content
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Cannot parse JSON: {e}\nRaw: {content!r}")
+    raise RuntimeError(f"Unexpected response type: {type(content)}")
 
-# ─────── Telegram Handlers ───────
+# ─────── Telegram handlers ───────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("User %s started the bot", update.effective_user.id)
     await update.message.reply_text("👋 Привет! Пришли фото блюда — скажу название и КБЖУ на 100 г.")
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    log.info("🔍 HANDLE_PHOTO start for user %s", update.effective_user.id)
     try:
         photo = update.message.photo[-1]
-        if photo.file_size > MAX_FILE_SIZE:
+        if photo.file_size and photo.file_size > MAX_FILE_SIZE:
             return await update.message.reply_text("⚠️ Фото >10 МБ, пришлите поменьше.")
+
         tg_file: File = await photo.get_file()
         buf = io.BytesIO()
         await tg_file.download_to_memory(out=buf)
         raw = buf.getvalue()
+
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         buf = io.BytesIO(); img.save(buf, format="JPEG", quality=85)
         img_b64 = base64.b64encode(buf.getvalue()).decode()
+        log.info("🔍 Image converted to base64, length=%d", len(img_b64))
 
         await update.message.reply_text("🤖 Анализирую фото…")
         data = await analyse_image(img_b64)
 
-        dish = data.get("dish","—"); cal = data.get("calories","—")
-        prot = data.get("protein","—"); fat = data.get("fat","—"); carb = data.get("carbs","—")
+        dish = data.get("dish", "—")
+        cal  = data.get("calories", "—")
+        prot = data.get("protein", "—")
+        fat  = data.get("fat", "—")
+        carb = data.get("carbs", "—")
+
         await update.message.reply_text(
-            f"🍽 {dish}\n🔥 {cal} ккал/100 г\n🥩 {prot} г  🥑 {fat} г  🍞 {carb} г"
+            f"🍽 {dish}\n"
+            f"🔥 {cal} ккал / 100 г\n"
+            f"🥩 {prot} г   🥑 {fat} г   🍞 {carb} г"
         )
+        log.info("🔍 HANDLE_PHOTO done for %s: %s", update.effective_user.id, dish)
 
     except Exception as e:
         log.error("Handle photo error: %s", e, exc_info=True)
         await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуйте ещё.")
 
-# ─────── Подключение Handlers ───────
 application.add_handler(CommandHandler("start", cmd_start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-# ─────── Webhook Endpoint ───────
+# ─────── Webhook endpoint ───────
 @app.post("/", status_code=200)
 async def telegram_webhook(req: Request):
     data = await req.json()
@@ -98,12 +116,12 @@ async def telegram_webhook(req: Request):
     try:
         await application.process_update(upd)
     except Exception as e:
-        log.error("❌ Error in process_update: %s", e, exc_info=True)
+        log.error("Error in process_update: %s", e, exc_info=True)
     return {"ok": True}
 
 @app.get("/")
 async def root():
-    return {"status":"alive"}
+    return {"status": "alive"}
 
 # ─────── Startup / Shutdown ───────
 @app.on_event("startup")
