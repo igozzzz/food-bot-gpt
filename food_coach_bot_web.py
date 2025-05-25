@@ -49,7 +49,7 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
             {"role": "user",
              "content": [
                  {"type": "image_url",
-                  "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}},
+                  "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
                  {"type": "text",
                   "text": "Проанализируй это блюдо и дай КБЖУ на 100 г."},
              ]},
