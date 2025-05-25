@@ -133,4 +133,4 @@ async def on_shutdown():
 
 # ─── Локальный запуск ─────────────────────────
 if __name__ == "__main__":
-    uvicorn.run("food_bot_webhook:app", host="0.0.0.0", port=PORT)
+    uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
