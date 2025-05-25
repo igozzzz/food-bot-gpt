@@ -65,7 +65,7 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
     """Отправляем картинку, получаем dict c dish/calories/protein/fat/carbs."""
     resp = await openai_client.chat.completions.create(
     model="gpt-4o",
-    response_format="json",   # <-- исправлено здесь
+    response_format="json_object",   # <-- исправлено здесь
     temperature=0.2,
     max_tokens=200,
     messages=[
