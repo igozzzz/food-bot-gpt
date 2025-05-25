@@ -124,12 +124,13 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 application.add_handler(CommandHandler("start", cmd_start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-# ────── FastAPI webhook ───────────────────────────────────────────────────────
+# ───── FastAPI webhook ─────────────────────────────────────────
 @app.post("/", status_code=200)
 async def telegram_webhook(req: Request) -> dict:
     data = await req.json()
-    # Render дергает health-check до init; страхуемся
-    if not application.initialized:
+
+    # ① если бот ещё не инициализирован — делаем это «лениво»
+    if not getattr(application, "_initialized", False):
         await application.initialize()
 
     update = Update.de_json(data, application.bot)
