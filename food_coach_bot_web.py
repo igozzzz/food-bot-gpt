@@ -63,7 +63,7 @@ openai_client = openai.AsyncOpenAI(
 async def analyse_image(img_b64: str) -> dict[str, Any]:
     resp = await openai_client.chat.completions.create(
         model="gpt-4o",
-        response_format={"type": "json_object"},  # must be object
+        response_format={"type": "json_object"},  # строго объект
         temperature=0.2,
         max_tokens=200,
         messages=[
@@ -89,8 +89,11 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
             },
         ],
     )
-    # уже dict
-    return resp.choices[0].message.content
+    content = resp.choices[0].message.content
+    # иногда библиотека возвращает строку, а иногда dict
+    if isinstance(content, str):
+        return json.loads(content)
+    return content
 
 # ──────── Handlers ─────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -107,7 +110,6 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
         tg_file: File = await photo.get_file()
         buf = io.BytesIO()
-        # download_to_memory требует out=buf
         await tg_file.download_to_memory(out=buf)
         raw = buf.getvalue()
 
@@ -156,7 +158,6 @@ async def root() -> dict:
 # ──────── FastAPI events ──────────────────────────────
 @app.on_event("startup")
 async def on_startup():
-    # инициализируем
     await application.initialize()
     await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
     log.info("Webhook установлен: %s", WEBHOOK_URL)
@@ -164,7 +165,6 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot.delete_webhook()
-    # PTB v21 не требует .startup/.shutdown
     await application.shutdown()
     log.info("Webhook удалён, бот остановлен")
 
