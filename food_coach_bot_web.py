@@ -5,7 +5,7 @@ Telegram-бот-нутрициолог: присылаете фото блюда
 получаете название + КБЖУ на 100 г.
 
 • PTB v21, FastAPI web-hook
-• OpenAI (gpt-4o / gpt-4o-mini) — ответ строго в JSON
+• OpenAI (gpt-4o-mini) — ответ строго в JSON
 • Требуемые env-переменные: TELEGRAM_TOKEN, OPENAI_API_KEY, WEBHOOK_URL, PORT
 """
 
@@ -20,7 +20,7 @@ import httpx
 import uvicorn
 from dotenv import load_dotenv
 from PIL import Image
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from telegram import Update, Bot, File
 from telegram.ext import (
     ApplicationBuilder,
@@ -30,39 +30,41 @@ from telegram.ext import (
     filters,
 )
 
-# ──────── логирование ───────────────────────────────────────
+# ────────── логирование ────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 log = logging.getLogger("food_bot")
 
-# ──────── ENV ──────────────────────────────────────
+# ────────── ENV ────────────────────────────────────────────────────
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-WEBHOOK_URL    = os.getenv("WEBHOOK_URL")          # https://…/
+WEBHOOK_URL    = os.getenv("WEBHOOK_URL")  # https://…
 PORT           = int(os.getenv("PORT", 8000))
-MAX_FILE_SIZE  = 10 * 1024 * 1024                  # 10 МБ
+MAX_FILE_SIZE  = 10 * 1024 * 1024          # 10 МБ
 
 if not all([TELEGRAM_TOKEN, OPENAI_API_KEY, WEBHOOK_URL]):
-    raise RuntimeError("Нужно задать TELEGRAM_TOKEN, OPENAI_API_KEY, WEBHOOK_URL")
+    raise RuntimeError("Нужно задать TELEGRAM_TOKEN, OPENAI_API_KEY и WEBHOOK_URL")
 
-# ──────── внешние клиенты ─────────────────────────────────────
+# ────────── клиенты ───────────────────────────────────────────────────
 bot = Bot(token=TELEGRAM_TOKEN)
 application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 app = FastAPI()
 
 import openai
-# используем new AsyncOpenAI-клиент
 openai_client = openai.AsyncOpenAI(
     api_key=OPENAI_API_KEY,
     http_client=httpx.AsyncClient(timeout=30.0),
 )
 
-# ──────── OpenAI helper ───────────────────────────────────
+# ────────── OpenAI helper ────────────────────────────────────────────
 async def analyse_image(img_b64: str) -> Dict[str, Any]:
-    """Отправляем картинку, получаем dict c dish/calories/protein/fat/carbs."""
+    """
+    Отправляем картинку, получаем dict с dish/calories/protein/fat/carbs.
+    Теперь всегда возвращаем числа, даже если не уверены.
+    """
     resp = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         response_format={"type": "json_object"},
@@ -74,64 +76,56 @@ async def analyse_image(img_b64: str) -> Dict[str, Any]:
                 "content": (
                     "Ты — опытный нутрициолог. Проанализируй фото блюда и верни "
                     "JSON-объект с ключами: dish, calories, protein, fat, carbs. "
-                    "Значения — на 100 г; если нет точной уверенности — поставь \"—\"."
-                )
+                    "Значения — на 100 г. Если не полностью уверен, оцени приблизительно числом."
+                ),
             },
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{img_b64}"
-                        }
-                    },
-                    {
-                        "type": "text",
-                        "text": "Проанализируй это блюдо и дай КБЖУ на 100 г."
-                    },
-                ]
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+                    {"type": "text", "text": "Проанализируй блюдо на фото."},
+                ],
             },
         ],
     )
-    # в resp.choices[0].message.content уже JSON-строка
     return json.loads(resp.choices[0].message.content)
 
-# ──────── Telegram-handlers ─────────────────────────────────
+# ────────── Telegram-handlers ────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "👋 Привет! Пришли фото блюда — скажу название и КБЖУ на 100 г."
+        "👋 Привет! Пришли фото блюда — я скажу название и КБЖУ на 100 г."
     )
-    log.info("User %s started bot", update.effective_user.id)
+    log.info(f"User {update.effective_user.id} started the bot")
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     try:
-        photo = update.message.photo[-1]  # самое большое
-        log.info("🔍 HANDLE_PHOTO: got %d photo sizes", len(update.message.photo))
+        photo = update.message.photo[-1]
         if photo.file_size and photo.file_size > MAX_FILE_SIZE:
-            await update.message.reply_text("⚠️ Фото > 10 МБ. Пришлите поменьше.")
+            await update.message.reply_text("⚠️ Фото больше 10 МБ, пришлите поменьше.")
             return
 
         tg_file: File = await photo.get_file()
         buf = io.BytesIO()
-        # download_to_memory(out=buf)
         await tg_file.download_to_memory(out=buf)
         raw = buf.getvalue()
-        log.info("🔍 HANDLE_PHOTO: downloaded %d bytes", len(raw))
 
-        # перекодируем и делаем base64
+        # Конвертируем в JPEG и base64
         img = Image.open(io.BytesIO(raw)).convert("RGB")
-        buf2 = io.BytesIO()
-        img.save(buf2, format="JPEG", quality=85)
-        img_b64 = base64.b64encode(buf2.getvalue()).decode()
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        img_b64 = base64.b64encode(buf.getvalue()).decode()
 
         await update.message.reply_text("🤖 Анализирую фото…")
-        log.info("🔍 HANDLE_PHOTO: calling analyse_image() for %s", update.effective_user.id)
+        log.info(f"User {update.effective_user.id}: started analysis")
 
-        data = await analyse_image(img_b64)
-        log.info("🔍 HANDLE_PHOTO: analyse_image returned %r", data)
+        try:
+            data = await analyse_image(img_b64)
+        except Exception as e:
+            log.error("OpenAI error: %s", e, exc_info=True)
+            await update.message.reply_text("⚠️ Ошибка анализа. Попробуйте ещё раз.")
+            return
 
-        # достаем поля
         dish = data.get("dish", "—")
         cal  = data.get("calories", "—")
         p    = data.get("protein", "—")
@@ -143,34 +137,34 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             f"🔥 {cal} ккал / 100 г\n"
             f"🥩 {p} г   🥑 {f} г   🍞 {c} г"
         )
+        log.info(f"User {update.effective_user.id}: done — {dish}")
 
     except Exception as e:
         log.error("Handle photo error: %s", e, exc_info=True)
         await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуйте другое.")
 
-# ──────── PTB wiring ──────────────────────────────────
+# ────────── регистрируем хэндлеры PTB ────────────────────────────────
 application.add_handler(CommandHandler("start", cmd_start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
-# ──────── FastAPI webhook ────────────────────────────────
+# ────────── FastAPI webhook ───────────────────────────────────────────
 @app.post("/", status_code=200)
-async def telegram_webhook(req: Request) -> dict:
+async def telegram_webhook(req: Request) -> Dict[str, bool]:
     data = await req.json()
     if not getattr(application, "_initialized", False):
         await application.initialize()
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
+    upd = Update.de_json(data, application.bot)
+    await application.process_update(upd)
     return {"ok": True}
 
 @app.get("/")
-async def root() -> dict:
+async def root() -> Dict[str, str]:
     return {"status": "alive"}
 
-# ──────── FastAPI events ────────────────────────────────
+# ────────── события FastAPI ────────────────────────────────────────────
 @app.on_event("startup")
 async def on_startup():
     await application.initialize()
-    # удаляем текущие апдейты, ставим webhook
     await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
     log.info("Webhook установлен: %s", WEBHOOK_URL)
 
@@ -178,8 +172,8 @@ async def on_startup():
 async def on_shutdown():
     await bot.delete_webhook()
     await application.shutdown()
-    log.info("Webhook удалён, бот остановлен")
+    log.info("Webhook удалён, приложение остановлено")
 
-# ──────── локальный запуск ───────────────────────────
+# ────────── локальный запуск ───────────────────────────────────────────
 if __name__ == "__main__":
     uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
