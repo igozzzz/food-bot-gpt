@@ -20,7 +20,7 @@ import httpx
 import uvicorn
 from dotenv import load_dotenv
 from PIL import Image
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request
 from telegram import Update, Bot, File
 from telegram.ext import (
     ApplicationBuilder,
@@ -61,10 +61,6 @@ openai_client = openai.AsyncOpenAI(
 
 # ────────── OpenAI helper ────────────────────────────────────────────
 async def analyse_image(img_b64: str) -> Dict[str, Any]:
-    """
-    Отправляем картинку, получаем dict с dish/calories/protein/fat/carbs.
-    Теперь всегда возвращаем числа, даже если не уверены.
-    """
     resp = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         response_format={"type": "json_object"},
@@ -76,8 +72,8 @@ async def analyse_image(img_b64: str) -> Dict[str, Any]:
                 "content": (
                     "Ты — опытный нутрициолог. Проанализируй фото блюда и верни "
                     "JSON-объект с ключами: dish, calories, protein, fat, carbs. "
-                    "Значения — на 100 г. Если не полностью уверен, оцени приблизительно числом."
-                ),
+                    "Значения — на 100 г. Если не уверен, оцени приблизительно числом."
+                )
             },
             {
                 "role": "user",
@@ -85,7 +81,7 @@ async def analyse_image(img_b64: str) -> Dict[str, Any]:
                     {"type": "image_url",
                      "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
                     {"type": "text", "text": "Проанализируй блюдо на фото."},
-                ],
+                ]
             },
         ],
     )
@@ -110,21 +106,15 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await tg_file.download_to_memory(out=buf)
         raw = buf.getvalue()
 
-        # Конвертируем в JPEG и base64
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         img_b64 = base64.b64encode(buf.getvalue()).decode()
 
         await update.message.reply_text("🤖 Анализирую фото…")
-        log.info(f"User {update.effective_user.id}: started analysis")
+        log.info(f"User {update.effective_user.id}: анализ фото")
 
-        try:
-            data = await analyse_image(img_b64)
-        except Exception as e:
-            log.error("OpenAI error: %s", e, exc_info=True)
-            await update.message.reply_text("⚠️ Ошибка анализа. Попробуйте ещё раз.")
-            return
+        data = await analyse_image(img_b64)
 
         dish = data.get("dish", "—")
         cal  = data.get("calories", "—")
@@ -137,28 +127,34 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             f"🔥 {cal} ккал / 100 г\n"
             f"🥩 {p} г   🥑 {f} г   🍞 {c} г"
         )
-        log.info(f"User {update.effective_user.id}: done — {dish}")
+        log.info(f"User {update.effective_user.id}: результат — {dish}")
 
     except Exception as e:
-        log.error("Handle photo error: %s", e, exc_info=True)
+        log.error("Handle photo error:", exc_info=True)
         await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуйте другое.")
 
-# ────────── регистрируем хэндлеры PTB ────────────────────────────────
+# ────────── регистрируем хэндлеры ────────────────────────────────────
 application.add_handler(CommandHandler("start", cmd_start))
 application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+
+# ────────── глобальный обработчик ошибок ─────────────────────────────
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    log.error("Update caused error:", exc_info=context.error)
+    if update.effective_message:
+        await update.effective_message.reply_text("⚠️ Что-то пошло не так. Попробуйте снова.")
+
+application.add_error_handler(error_handler)
 
 # ────────── FastAPI webhook ───────────────────────────────────────────
 @app.post("/", status_code=200)
 async def telegram_webhook(req: Request) -> Dict[str, bool]:
     data = await req.json()
-    if not getattr(application, "_initialized", False):
-        await application.initialize()
     upd = Update.de_json(data, application.bot)
     await application.process_update(upd)
     return {"ok": True}
 
 @app.get("/")
-async def root() -> Dict[str, str]:
+async def healthcheck() -> Dict[str, str]:
     return {"status": "alive"}
 
 # ────────── события FastAPI ────────────────────────────────────────────
@@ -174,6 +170,6 @@ async def on_shutdown():
     await application.shutdown()
     log.info("Webhook удалён, приложение остановлено")
 
-# ────────── локальный запуск ───────────────────────────────────────────
+# ────────── локальный запуск ────────────────────────────────────────────
 if __name__ == "__main__":
     uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
