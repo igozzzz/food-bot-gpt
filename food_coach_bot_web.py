@@ -57,15 +57,15 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
         temperature=0.2,
         max_tokens=200,
         messages=[
-            {"role": "system", "content": (
-                "Ты нутрициолог. Верни JSON-объект с ключами: "
-                "dish, calories, protein, fat, carbs. "
-                "Значения — на 100 г. Если уверенности нет — ставь \"—\"."
-            )},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                {"type": "text", "text": "Проанализируй блюдо на фото."},
-            ]},
+           {
+                "role": "system",
+                "content": (
+                    "Ты нутрициолог. Проанализируй фото блюда и верни JSON-объект "
+                    "с полями: dish, calories, protein, fat, carbs. "
+                    "Всегда указывай числовые значения или диапазоны на 100 г, "
+                    "даже если не уверен полностью, угадай примерные значения \"—\"."
+                )
+            },
         ],
     )
     content = resp.choices[0].message.content or ""
