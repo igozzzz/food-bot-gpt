@@ -51,6 +51,7 @@ openai_client = openai.AsyncOpenAI(
 
 # ─────── OpenAI helper ───────
 async def analyse_image(img_b64: str) -> dict[str, Any]:
+    """Отправляем картинку, получаем dict c dish/calories/protein/fat/carbs."""
     resp = await openai_client.chat.completions.create(
         model="gpt-4o",
         temperature=0.2,
@@ -58,7 +59,8 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
         messages=[
             {"role": "system", "content": (
                 "Ты нутрициолог. Верни JSON-объект с ключами: "
-                "dish, calories, protein, fat, carbs. Значения — на 100 г. Если уверенности нет — ставь \"\u2014\"."
+                "dish, calories, protein, fat, carbs. "
+                "Значения — на 100 г. Если уверенности нет — ставь \"—\"."
             )},
             {"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
@@ -66,7 +68,15 @@ async def analyse_image(img_b64: str) -> dict[str, Any]:
             ]},
         ],
     )
-    return json.loads(resp.choices[0].message.content)
+    content = resp.choices[0].message.content or ""
+    # Удаляем возможные обрамляющие тройные бэктики и тег json
+    content = content.strip().lstrip("```json").rstrip("``` ")
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        log.error(f"Ошибка парсинга JSON от OpenAI: {e}. Сырой ответ: {content}")
+        raise
+
 
 # ─────── Telegram Handlers ───────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
