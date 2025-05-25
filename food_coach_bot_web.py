@@ -136,4 +136,4 @@ async def shutdown():
 
 # ─────────── локальный запуск ───────────
 if __name__ == "__main__":
-    uvicorn.run("simple_food_bot_web:app", host="0.0.0.0", port=PORT)
+    uvicorn.run("food_coach_bot_web:app", host="0.0.0.0", port=PORT)
