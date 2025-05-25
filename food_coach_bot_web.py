@@ -64,25 +64,25 @@ openai_client = openai.AsyncOpenAI(
 async def analyse_image(img_b64: str) -> dict[str, Any]:
     """Отправляем картинку, получаем dict c dish/calories/protein/fat/carbs."""
     resp = await openai_client.chat.completions.create(
-        model="gpt-4o-mini",
-        response_format="json",
-        temperature=0.2,
-        max_tokens=200,
-        messages=[
-            {"role": "system",
-             "content": (
-                 "Ты нутрициолог. Верни JSON-объект с ключами: "
-                 "dish, calories, protein, fat, carbs. "
-                 "Значения — на 100 г. Если уверенности нет — ставь \"\u2014\"."
-             )},
-            {"role": "user",
-             "content": [
-                 {"type": "image_url",
-                  "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
-                 {"type": "text",
-                  "text": "Проанализируй блюдо на фото."},
-             ]},
-        ],
+    model="gpt-4o",
+    response_format="json",   # <-- исправлено здесь
+    temperature=0.2,
+    max_tokens=200,
+    messages=[
+        {"role": "system",
+         "content": (
+             "Ты нутрициолог. Верни JSON-объект с ключами: "
+             "dish, calories, protein, fat, carbs. "
+             "Значения — на 100 г. Если уверенности нет — ставь \"—\"."
+         )},
+        {"role": "user",
+         "content": [
+             {"type": "image_url",
+              "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}},
+             {"type": "text",
+              "text": "Проанализируй блюдо на фото."},
+         ]},
+    ],
     )
     return json.loads(resp.choices[0].message.content)
 
