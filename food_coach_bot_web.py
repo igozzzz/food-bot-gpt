@@ -95,8 +95,14 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     log.info(f"User {update.effective_user.id} started the bot")
 
 async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    log.info(f"🔍 HANDLE_PHOTO start for user {update.effective_user.id}")
+    if not update.message or not update.message.photo:
+        log.warning("🔍 No photo in update")
+        return
+
     try:
         photo = update.message.photo[-1]
+        log.info(f"🔍 Photo size: {photo.file_size}")
         if photo.file_size and photo.file_size > MAX_FILE_SIZE:
             await update.message.reply_text("⚠️ Фото больше 10 МБ, пришлите поменьше.")
             return
@@ -105,16 +111,24 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         buf = io.BytesIO()
         await tg_file.download_to_memory(out=buf)
         raw = buf.getvalue()
+        log.info(f"🔍 Downloaded {len(raw)} bytes")
 
         img = Image.open(io.BytesIO(raw)).convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         img_b64 = base64.b64encode(buf.getvalue()).decode()
+        log.info("🔍 Image converted to base64, length=%d", len(img_b64))
 
         await update.message.reply_text("🤖 Анализирую фото…")
-        log.info(f"User {update.effective_user.id}: анализ фото")
+        log.info("🔍 Calling analyse_image()")
 
         data = await analyse_image(img_b64)
+        log.info("🔍 analyse_image returned %r", data)
+
+        # Если OpenAI вернул не dict, покажем сырый ответ
+        if not isinstance(data, dict):
+            await update.message.reply_text(f"⚠️ Некорректный ответ: {data}")
+            return
 
         dish = data.get("dish", "—")
         cal  = data.get("calories", "—")
@@ -127,10 +141,10 @@ async def handle_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             f"🔥 {cal} ккал / 100 г\n"
             f"🥩 {p} г   🥑 {f} г   🍞 {c} г"
         )
-        log.info(f"User {update.effective_user.id}: результат — {dish}")
+        log.info("🔍 HANDLE_PHOTO done")
 
-    except Exception as e:
-        log.error("Handle photo error:", exc_info=True)
+    except Exception:
+        log.exception("⚠️ HANDLE_PHOTO error")
         await update.message.reply_text("⚠️ Не удалось обработать фото. Попробуйте другое.")
 
 # ────────── регистрируем хэндлеры ────────────────────────────────────
