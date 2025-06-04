@@ -30,7 +30,7 @@ log = logging.getLogger("food_bot")
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://<ваш-домен>
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://food-bot-gpt.onrender.com/
 PORT = int(os.getenv("PORT", 8000))
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 МБ
 
