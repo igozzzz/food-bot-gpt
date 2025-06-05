@@ -4,6 +4,7 @@ import io
 import json
 import base64
 import logging
+import asyncio
 from typing import Any, Dict, Optional
 
 import httpx
@@ -52,6 +53,16 @@ try:
 except ImportError:
     log.error("OpenAI library not installed. Install with: pip install openai")
     raise
+# ───── KEEP ALIVE TASK ─────────────────────────────────
+async def keep_alive(interval: int = 600):
+    """Periodically pings the service health endpoint to keep it alive."""
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(f"{WEBHOOK_URL}/health")
+        except Exception as e:
+            log.warning("Keep alive request failed: %s", e)
+        await asyncio.sleep(interval)
 
 # ───── ФУНКЦИЯ АНАЛИЗА ─────────────────────────────────
 async def analyse_image(img_b64: str) -> Dict[str, Any]:
@@ -254,6 +265,9 @@ async def on_startup():
         await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
         log.info("🚀 Webhook установлен: %s", WEBHOOK_URL)
         
+        # Запускаем периодический ping, чтобы не засыпал хостинг
+        app.state.keep_alive_task = asyncio.create_task(keep_alive())
+
         # Проверяем подключение
         me = await bot.get_me()
         log.info("✅ Bot connected: @%s (%s)", me.username, me.first_name)
@@ -266,6 +280,15 @@ async def on_startup():
 async def on_shutdown():
     """Очистка при остановке"""
     try:
+        # Останавливаем задачу поддержания активности
+        task = getattr(app.state, "keep_alive_task", None)
+        if task:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
         await bot.delete_webhook()
         await application.shutdown()
         
