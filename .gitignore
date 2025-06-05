@@ -4,4 +4,5 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-*.logsecrets.txt 
+*.log
+secrets.txt
